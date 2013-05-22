@@ -219,22 +219,15 @@ assigned to these statuses from the site-wide settings?</p>
 		if ($q->post_count > 0) :
 			$this->add_shortcodes();
 
-			$pre = get_option('fnosp_email_prefix', '');
-			$pre = do_shortcode($pre);
-			
-			$inter = get_option('fnosp_email_inter', "\n");
-			$inter = do_shortcode($inter);
+			$pre = $this->get_email_prefix(/*do=*/ true); 
+			$inter = $this->get_email_interstitial(/*do=*/ true);
 			
 			$mid = '';
 			while ($q->have_posts()) : $q->the_post();
-				$link_id = get_post_meta(
-					$post->ID, FNOPS_NOTIFICATION_POSTMETA,
-					/*single=*/ true
-				);
-				$sub = new SyndicatedLink($link_id);
+
+				$listing = $this->get_email_post_listing($post);
 				
-				$tmpl = $sub->setting('fnosp email template');
-				$mid .= do_shortcode($tmpl);
+				$mid .= $inter . $listing . $inter;
 				
 				delete_post_meta(
 					$post->ID, FNOPS_NOTIFICATION_POSTMETA
@@ -243,17 +236,116 @@ assigned to these statuses from the site-wide settings?</p>
 			endwhile;
 			wp_reset_query();
 			
-			$suf = get_option('fnosp_email_suffix', '');
-			$suf = do_shortcode($suf);
+			$suf = $this->get_email_suffix(/*do=*/ true);
 			
 			if (strlen($mid) > 0) :
-				/* STUB: Send message. */
+				$recipient = get_option('feedwordpress_fnosp_notify_email', "");
+				if (strlen(trim($recipient)) > 0) :
+					$subject = $this->get_email_subject(/*do=*/ true);
+				
+					$body = $pre . $mid . $suf;
+					$is_html =  (
+						'text/html'==$this->get_email_format()
+					); 
+					
+					if ($is_html) :
+						$html = wpautop($pre . $mid . $suf);
+						$body = <<<EOHTML
+<!DOCTYPE html>
+<html>
+<head>
+<title>${subject}</title>
+</head>
+<body>
+${html}
+</body>
+</html>
+EOHTML;
+
+						add_filter('wp_mail_content_type', array('FeedWordPress', 'allow_html_mail'));				
+					endif;
+				
+					wp_mail($recipient, $subject, $body);
+					
+					if ($is_html) :
+						remove_filter('wp_mail_content_type', array('FeedWordPress', 'allow_html_mail'));
+					endif;
+					
+				endif;
 			endif;
 			
 			$this->remove_shortcodes();
 
 		endif;
 	} /* FWPNotificationOfSyndicatedPosts::feedwordpress_update_complete () */
+	
+	public function get_email_format () {
+		$format = get_option('feedwordpress_fnosp_email_format', 'text/plain');
+		return $format;
+	}
+	
+	public function get_email_subject ($do = false) {
+		$subject = get_option('feedwordpress_fnosp_email_subject', 'Syndicated posts from '.feedwordpress_display_url(get_bloginfo('home')));
+		if ($do) :
+			$subject = do_shortcode($subject);
+		endif;
+		return $subject;
+	}
+	public function get_email_prefix ($do = false) {
+		$pre = get_option('feedwordpress_fnosp_email_prefix', '');
+		if ($do) :
+			$pre = do_shortcode($pre);
+		endif;
+		return $pre;
+	} /* FWPNotificationOfSyndicatedPosts::get_email_prefix () */
+	
+	public function get_email_interstitial ($do = false) {
+		$inter = get_option('feedwordpress_fnosp_email_inter', "\n");
+		if ($do) :
+			$inter = do_shortcode($inter);
+		endif;
+		
+		if (strlen(trim($inter)) == 0) :
+			$inter = "\n";
+		endif;
+		return $inter;
+	} /* FWPNotificationOfSyndicatedPosts::get_email_interstitial () */
+	
+	public function get_email_suffix ($do = false) {
+		$suf = get_option('feedwordpress_fnosp_email_suffix', 'Log in to WordPress: [wplogin]login[/wplogin]');
+		if ($do) :
+			$suf = do_shortcode($suf);
+		endif;
+		return $suf;
+	} /* FWPNotificationOfSyndicatedPosts::get_email_suffix () */
+	
+	public function get_email_post_listing ($post = NULL, $page = NULL) {
+		$default = "[post_link][post_title][/post_link] (#[post_id], [post_status]) [post_date format='F j, Y']\n[post_excerpt]\n[edit_link]edit[/edit_link]";
+		
+		if (!is_null($post)) :
+			$link_id = get_post_meta(
+				$post->ID, FNOPS_NOTIFICATION_POSTMETA,
+				/*single=*/ true
+			);
+	
+			$sub = new SyndicatedLink($link_id);
+
+			$tmpl = $sub->setting('fnosp email template', 'feedwordpress_fnosp_email_template', $default);
+
+			$tmpl = do_shortcode($tmpl);
+		elseif (!is_null($page)) :
+			if ($page->for_feed_settings()) :
+				$default = '';
+			endif;
+			
+			$tmpl = $page->setting('fnosp email template', $default, array("fallback" => false));
+		else :
+			// Just get the template for editing.
+			$tmpl = get_option('feedwordpress_fnosp_email_template', $default);
+			
+		endif;
+		return $tmpl;
+	} /* FWPNotificationOfSyndicatedPosts::get_email_post_listing () */
 	
 	public function get_shortcodes () {
 		return array(
@@ -334,7 +426,7 @@ assigned to these statuses from the site-wide settings?</p>
 	}
 	
 	public function shortcode_post_excerpt ($atts, $content = '') {
-		return get_the_excerpt();
+		return strip_tags(get_the_excerpt());
 	} /* FWPNotificationOfSyndicatedPosts::shortcode_post_excerpt () */
 	
 	public function shortcode_post_date ($atts, $content = '') {
@@ -361,7 +453,35 @@ assigned to these statuses from the site-wide settings?</p>
 	} /* FWPNotificationOfSyndicatedPosts::edit_link () */
 	
 	public function shouldNotify ($post) {
-		/*STUB*/ return true;
+		$sub = $post->link;
+		
+		$notify = false;
+		
+		// First things first: do we have an e-mail address for this to
+		// go to?
+		if (strlen($sub->setting("fnosp notify email", "feedwordpress_fnosp_notify_email", "")) > 0) :
+			$stati = $sub->setting("fnosp notify on status", NULL, array());
+			$stati = maybe_unserialize($stati);
+	
+			if ("no" != $sub->setting("fnosp add global stati", NULL, "yes")) :
+				$globalStati = get_option('feedwordpress_fnosp_notify_on_status', array());
+				$globalStati = maybe_unserialize($globalStati);
+			else :
+				$globalStati = array();
+			endif;
+			
+			$stati = array_merge($stati, $globalStati);
+			$notify = in_array($post->post['post_status'], $stati);
+			FeedWordPress::diagnostic(
+				"notify:test",
+				"Notify: ".json_encode($notify).". Tested post ".$post->post['ID']." status ".json_encode($post->post['post_status'])." against: ".json_encode($stati)
+			);
+		else :
+			FeedWordPress::diagnostic(
+				"notify:test", "Abort notification on ".$post->post['ID'].": No email recipient set for notifications."
+			);
+		endif;
+		return $notify;
 	} /* FWPNotificationOfSyndicatedPosts::shouldNotify () */
 } /* class FWPNotificationOfSyndicatedPosts */
 
