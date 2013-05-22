@@ -72,7 +72,7 @@ class FWPNotificationOfSyndicatedPosts {
 			$suf = do_shortcode($suf);
 			
 			if (strlen($mid) > 0) :
-				// STUB: Send message.
+				/* STUB: Send message. */
 			endif;
 			
 			$this->remove_shortcodes();
@@ -83,7 +83,8 @@ class FWPNotificationOfSyndicatedPosts {
 	public function get_shortcodes () {
 		return array(
 		"wpadmin",
-		// STUB: Other shortcodes
+		"post_title",
+		/* STUB: Other shortcodes */
 		);
 	} /* FWPNotificationOfSyndicatedPosts::get_shortcodes () */
 
@@ -109,6 +110,11 @@ class FWPNotificationOfSyndicatedPosts {
 		
 		return admin_url($atts['path'], $atts['scheme']);
 	} /* FWPNotificationOfSyndicatedPosts::shortcode_wpadmin () */
+	
+	public function shortcode_post_title ($atts, $content = '') {
+		global $post;
+		return get_the_title($post->ID);
+	}
 	
 	public function shouldNotify ($post) {
 		/*STUB*/ return true;
