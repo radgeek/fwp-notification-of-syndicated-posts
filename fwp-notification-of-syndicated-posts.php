@@ -21,8 +21,178 @@ class FWPNotificationOfSyndicatedPosts {
 		// Set up filter action hooks.
 		add_action('feedwordpress_update_complete', array($this, 'feedwordpress_update_complete'), 1, 1000);
 		add_action('post_syndicated_item', array($this, 'post_syndicated_item'), 2, 1000);
-			
+		
+		// Set up interface hooks for configuration UI
+		add_action('feedwordpress_admin_page_feeds_meta_boxes', array($this, 'add_settings_box'));
+		add_action('feedwordpress_admin_page_feeds_save', array($this, 'save_settings'), 10, 2);
+		add_action('feedwordpress_diagnostics', array($this, 'diagnostics'), 10, 2);
+		
 	} /* FWPNotificationOfSyndicatedPosts::__construct () */
+	
+	function add_settings_box ($page) {
+		add_meta_box(
+			/*id=*/ "feedwordpress_".__CLASS__."_box",
+			/*title=*/ __("Syndication Activity Notifications"),
+			/*callback=*/ array(&$this, 'display_settings'),
+			/*page=*/ $page->meta_box_context(),
+			/*context=*/ $page->meta_box_context()
+		);
+	} /* FWPNotificationOfSyndicatedPosts::add_settings_box() */
+	
+	public function diagnostics ($diag, $page) {
+		$diag['Syndicated Post Details']['notify:test'] = 'when we test whether an e-mail notification should be sent for a post';
+		return $diag;
+	} /* FWPNotificationOfSyndicatedPosts::diagnostics () */
+	
+	public function display_settings ($page, $box = NULL) {
+		$stati = get_post_stati(array(), 'objects');
+		$activeStati = maybe_unserialize(
+			$page->setting(
+				'fnosp notify on status',
+				/*default=*/ array(),
+				array(
+					"fallback" => false,
+				)
+			)
+		);
+		$globalStati = maybe_unserialize(get_option('feedwordpress_fnosp_notify_on_status', array()));
+		
+?>
+<table class="edit-form narrow">
+<tr><th scope="row"><?php _e('Email notifications:'); ?></th>
+<td><p>Send out e-mail notifications to: <input type="email" name="fnosp_notify_email" value="<?php print esc_attr($page->setting('fnosp notify email')); ?>" <?php if ($page->for_feed_settings()) : ?>disabled="disabled"<?php endif; ?> /><?php if ($page->for_feed_settings()) : ?>(global setting)<?php endif; ?></p>
+<?php if ($page->for_feed_settings()) : ?>
+<table class="twofer">
+<tbody>
+<tr>
+<td class="primary">
+<?php endif; ?>
+
+<p>for incoming syndicated posts that are given the status of:</p>
+<ul>
+<?php
+foreach ($stati as $status) :
+	if (!$status->internal) :
+?>
+<li><input type="checkbox" name="fnosp_notify_on_status[<?php print esc_attr($status->name); ?>]" value="yes" <?php if (in_array($status->name, $activeStati)) : ?>
+ checked="checked"
+<?php endif; ?> /> <?php print esc_html($status->label); ?></li>
+<?php
+	endif;
+endforeach;
+?>
+</ul>
+
+<?php
+	$fmt = $page->setting('fnosp email format', 'text/plain');
+	$fmtSelected = array("text/plain" => '', "text/html" => '');
+	$fmtSelected[$fmt] = ' selected="selected"';
+
+if ($page->for_feed_settings()) :
+	$addGlobalStati = $page->setting('fnosp add global stati', 'yes');
+	$agsChecked = array("yes" => '', "no" => '');
+	$agsChecked[$addGlobalStati] = ' checked="checked"';
+	
+?>
+</td>
+
+<td class="secondary">
+<h4>Site-wide Notifications</h4>
+<?php if (count($globalStati) > 0) : ?>
+<p>By default, we will send out notifications on posts from any feed set as:</p>
+<ul class="current-setting">
+<li><?php print implode("</li>\n<li>", $globalStati); ?></li>
+</ul>
+<?php else : ?>
+<p>Site-wide settings may also send out notifications on syndicated posts with specific status settings.</p>
+<?php endif; ?>
+
+<p>Should <?php print $page->these_posts_phrase(); ?> trigger notifications when
+assigned to these statuses from the site-wide settings?</p>
+
+<ul class="settings">
+<li><p><label><input type="radio" name="fnosp_add_global_stati" value="yes" <?php print $agsChecked['yes']; ?> /> Yes. Use both sets of statuses to trigger notifications for posts from this feed.</label></p></li>
+<li><p><label><input type="radio" name="fnosp_add_global_stati" value="no" <?php print $agsChecked['no']; ?> /> No. With posts from <em>this</em> feed, only send out notifications for the statuses I set up on the left. Do not use the global defaults.</label></li>
+</ul>
+
+</td>
+</tr>
+</tbody>
+</table>
+
+<?php endif; ?>
+</td></tr>
+
+<tr><th scope="row">Notification E-mail Templates:</th>
+<td>
+<?php if ($page->for_default_settings()) : ?>
+<p><label>Format:</label> <select name="fnosp_email_format" size="1">
+  <option value="text/plain"<?php print $fmtSelected['text/plain']; ?>>Text</option>
+  <option value="text/html"<?php print $fmtSelected['text/html']; ?>>HTML</option>
+</select></p>
+
+<p><label>Subject:</label> <input type="text" name="fnosp_email_subject" size="127" value="<?php print esc_html($this->get_email_subject()); ?>" /></label></p>
+
+<h4>(e-mail opening)</h4>
+<textarea name="fnosp_email_prefix" rows="3" cols="80" style="width: auto"><?php print esc_html($this->get_email_prefix()); ?></textarea>
+<?php endif; ?>
+
+<h4>(post listing)</h4>
+<textarea name="fnosp_email_template" rows="5" cols="80" style="width: auto"><?php print esc_html($this->get_email_post_listing(NULL, $page)); ?></textarea>
+<?php if ($page->for_feed_settings()) : ?>
+<p class="explanation">(leave blank to use default from site-wide settings)</p>
+<?php endif; ?>
+
+<?php if ($page->for_default_settings()) : ?>
+<h4>(in between each post)</h4>
+<textarea name="fnosp_email_inter" rows="1" cols="80" style="width: auto"<?php print esc_html($this->get_email_interstitial()); ?>></textarea>
+
+<h4>(e-mail closing)</h4>
+<textarea name="fnosp_email_suffix" rows="3" cols="80" style="width: auto"><?php print esc_html($this->get_email_suffix()); ?></textarea>
+<?php endif; ?>
+</td>
+</tr>
+</table>
+<?php
+	} /* FWPNotificationOfSyndicatedPosts::display_settings () */
+	
+	public function save_settings ($params, $page) {
+		// Some of these are global-only settings.
+		if ($page->for_default_settings()) :
+			$page->update_setting('fnosp notify email', $params['fnosp_notify_email']);
+			$page->update_setting('fnosp email prefix', $params['fnosp_email_prefix']);
+			$page->update_setting('fnosp email inter', $params['fnosp_email_inter']);
+			$page->update_setting('fnosp email suffix', $params['fnosp_email_suffix']);
+			$page->update_setting('fnosp email subject', $params['fnosp_email_subject']);
+			$page->update_setting('fnosp email format', $params['fnosp_email_format']);
+			
+		// And some are local-only settings
+		else :
+			$page->update_setting('fnosp add global stati', $params['fnosp_add_global_stati']);
+		endif;
+		
+		if (strlen(trim($params['fnosp_email_template'])) > 0) :
+			$page->update_setting('fnosp email template', $params['fnosp_email_template']);
+		else :
+			$page->update_setting('fnosp email template', $params['fnosp_email_template'], NULL);
+		endif;
+		
+		if (!isset($params['fnosp_notify_on_status'])) :
+			$fNOS = array();
+		else :
+			$fNOS = $params['fnosp_notify_on_status'];
+		endif;
+		
+		$stati = array();
+		foreach ($fNOS as $status => $on) :
+			if ('yes' == $on) :
+				$stati[] = $status;
+			endif;
+		endforeach;
+			
+		$page->update_setting('fnosp notify on status', serialize($stati));
+		
+	} /* FWPNotificationOfSyndicatedPosts::save_settings () */
 	
 	public function post_syndicated_item ($id, $post) {
 		// We are in an update process and just inserted a new post.
@@ -30,14 +200,16 @@ class FWPNotificationOfSyndicatedPosts {
 		// of the update process.
 		if ($this->shouldNotify($post)) :
 			$link = $post->link;
-			add_post_meta($id, FNOPS_NOTIFICATION_POSTMETA, $link->id());
+			$foo = add_post_meta($id, FNOPS_NOTIFICATION_POSTMETA, $link->id());
 		endif;
 	} /* FWPNotificationOfSyndicatedPosts::post_syndicated_item () */
 
 	public function feedwordpress_update_complete ($delta) {
 		// Let's do this.
 		$q = new WP_Query(array(
+		'ignore_sticky_posts' => true,
 		'post_type' => 'any',
+		'post_status' => 'any',
 		'meta_key' => FNOPS_NOTIFICATION_POSTMETA,
 		'posts_per_page' => 10,
 		));
